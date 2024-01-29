@@ -386,6 +386,18 @@ kj::Promise<WorkerInterface::AlarmResult> ServiceWorkerGlobalScope::runAlarm(
 
     auto& alarm = KJ_ASSERT_NONNULL(handler.alarm);
 
+    // We want to limit alarm handler walltime to 15 minutes at most. If the timeout promise
+    // completes we want to cancel the alarm handler. If the alarm handler promise completes first
+    // timeout will be canceled.
+    auto timeout = context.afterLimitTimeout(15 * kj::MINUTES).then(
+      []() -> kj::Promise<WorkerInterface::AlarmResult> {
+      return WorkerInterface::AlarmResult {
+        .retry = true,
+        .retryCountsAgainstLimit = true,
+        .outcome = EventOutcome::EXCEPTION
+      };
+    });
+
     auto alarmResultPromise = context
         .run([exportedHandler, &alarm,
               maybeAsyncContext = jsg::AsyncContextFrame::currentRef(lock)]
@@ -397,10 +409,7 @@ kj::Promise<WorkerInterface::AlarmResult> ServiceWorkerGlobalScope::runAlarm(
           .outcome = EventOutcome::OK
         };
       });
-    });
-
-    return alarmResultPromise
-        .catch_([&context, deferredDelete = kj::mv(deferredDelete)](kj::Exception&& e) mutable {
+    }).catch_([&context, deferredDelete = kj::mv(deferredDelete)](kj::Exception&& e) mutable {
       auto& actor = KJ_ASSERT_NONNULL(context.getActor());
       auto& persistent = KJ_ASSERT_NONNULL(actor.getPersistent());
       persistent.cancelDeferredAlarmDeletion();
@@ -419,7 +428,11 @@ kj::Promise<WorkerInterface::AlarmResult> ServiceWorkerGlobalScope::runAlarm(
         .retryCountsAgainstLimit = !context.isOutputGateBroken(),
         .outcome = outcome
       };
-    }).then([&context](WorkerInterface::AlarmResult result) -> kj::Promise<WorkerInterface::AlarmResult> {
+    });
+
+    auto alarmResultPromiseWithTimeout = alarmResultPromise.exclusiveJoin(kj::mv(timeout));
+
+    return alarmResultPromiseWithTimeout.then([&context](WorkerInterface::AlarmResult result) -> kj::Promise<WorkerInterface::AlarmResult> {
       return context.waitForOutputLocks().then([result]() {
         return kj::mv(result);
       }, [](kj::Exception&& e) {
