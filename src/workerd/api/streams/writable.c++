@@ -197,7 +197,14 @@ bool WritableStream::inspectExpectsBytes() {
 }
 
 void WritableStreamDefaultWriter::visitForGc(jsg::GcVisitor& visitor) {
-  visitor.visit(closedPromise, readyPromise);
+  KJ_IF_SOME(writable, state.tryGet<Attached>()) {
+    visitor.visit(writable);
+  } else {
+    // If the writer is attached, then visiting the writable should visit the
+    // closedPromise and readyPromise via visiting their associated resolvers.
+    // Otherwise, we need to visit those directly if they are set.
+    visitor.visit(closedPromise, readyPromise);
+  }
 }
 
 // ======================================================================================

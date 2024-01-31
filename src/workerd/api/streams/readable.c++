@@ -155,7 +155,14 @@ void ReaderImpl::releaseLock(jsg::Lock& js) {
 }
 
 void ReaderImpl::visitForGc(jsg::GcVisitor& visitor) {
-  visitor.visit(closedPromise);
+  KJ_IF_SOME(readable, state.tryGet<Attached>()) {
+    visitor.visit(readable);
+  } else {
+    // If the reader is attached, then visiting the readable should visit the
+    // closedPromise via visiting the associated resolver.
+    // Otherwise, we need to visit it directly if they are set.
+    visitor.visit(closedPromise);
+  }
 }
 
 // ======================================================================================
